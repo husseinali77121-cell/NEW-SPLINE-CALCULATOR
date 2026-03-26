@@ -1,132 +1,106 @@
+import streamlit as st
 import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+from scipy.interpolate import CubicSpline
 
-def natural_cubic_spline(x, y):
-    """
-    حساب معاملات Natural Cubic Spline.
-    
-    المعاملات لكل فترة i:
-        S_i(x) = A_i + B_i*(x - x_i) + C_i*(x - x_i)^2 + D_i*(x - x_i)^3
-    حيث:
-        A_i = y_i
-        B_i = معامل الخطي
-        C_i = معامل التربيعي
-        D_i = معامل التكعيبي
-    
-    المدخلات:
-        x: قائمة تركيزات (يجب أن تكون متزايدة)
-        y: قائمة امتصاصية مقابلة
-    
-    المخرجات:
-        list of tuples: (A, B, C, D) لكل فترة
-    """
-    n = len(x) - 1  # عدد الفترات
-    h = [x[i+1] - x[i] for i in range(n)]
-    
-    # بناء المصفوفة الثلاثية القطرية
-    A_matrix = np.zeros((n+1, n+1))
-    b = np.zeros(n+1)
-    
-    # الحدود الطبيعية (second derivatives = 0 عند الأطراف)
-    A_matrix[0][0] = 1.0
-    A_matrix[n][n] = 1.0
-    
-    for i in range(1, n):
-        A_matrix[i][i-1] = h[i-1]
-        A_matrix[i][i] = 2 * (h[i-1] + h[i])
-        A_matrix[i][i+1] = h[i]
-        b[i] = 3 * ((y[i+1] - y[i]) / h[i] - (y[i] - y[i-1]) / h[i-1])
-    
-    # حل النظام لإيجاد المشتقات الثانية
-    c = np.linalg.solve(A_matrix, b)  # c[i] = S''(x_i)/2
-    
-    # حساب المعاملات لكل فترة
-    coeffs = []
-    for i in range(n):
-        A = y[i]
-        B = (y[i+1] - y[i]) / h[i] - h[i] * (2*c[i] + c[i+1]) / 3
-        C = c[i]
-        D = (c[i+1] - c[i]) / (3 * h[i])
-        coeffs.append((A, B, C, D))
-    
-    return coeffs
+st.set_page_config(page_title="Spline Calculator - Biobase", layout="wide")
+st.title("📊 حساب معاملات Spline لجهاز Biobase")
+st.markdown("أدخل بيانات الامتصاصية مقابل التركيز، وسيقوم التطبيق بحساب معاملات شريحة المكعب الطبيعي (Natural Cubic Spline).")
 
-def main():
-    print("برنامج حساب معاملات Spline من بيانات الامتصاصية والتركيز")
-    print("="*60)
-    
-    # إدخال عدد النقاط
-    while True:
+# جلسة لحفظ البيانات المدخلة
+if "data" not in st.session_state:
+    st.session_state.data = pd.DataFrame({"Concentration": [], "Absorbance": []})
+
+# عدد النقاط (ثابت: 4 أو 5)
+col1, col2 = st.columns([1, 2])
+with col1:
+    n_points = st.selectbox("عدد النقاط:", [4, 5], index=0)
+    st.write("أدخل القيم في الجدول أدناه:")
+
+# إدخال البيانات عبر جدول تفاعلي
+edited_df = st.data_editor(
+    st.session_state.data,
+    num_rows="dynamic",
+    column_config={
+        "Concentration": st.column_config.NumberColumn("التركيز", format="%.4f"),
+        "Absorbance": st.column_config.NumberColumn("الامتصاصية", format="%.4f"),
+    },
+    use_container_width=True,
+)
+
+# تخزين البيانات في الجلسة
+st.session_state.data = edited_df
+
+# زر للحساب
+if st.button("🔍 حساب المعاملات ورسم المنحنى", type="primary"):
+    df = st.session_state.data.dropna()
+    if len(df) < 2:
+        st.error("الرجاء إدخال نقطتين على الأقل.")
+    else:
+        # ترتيب حسب التركيز
+        df = df.sort_values("Concentration").reset_index(drop=True)
+        x = df["Concentration"].values
+        y = df["Absorbance"].values
+
+        # التأكد من أن قيم التركيز فريدة (لـ spline)
+        if len(np.unique(x)) != len(x):
+            st.warning("يوجد تركيزات مكررة، سيتم التعامل معها ولكن النتائج قد لا تكون دقيقة.")
+
+        # حساب Spline باستخدام scipy (طبيعي)
         try:
-            n = int(input("أدخل عدد النقاط (4 أو 5 مثلاً): "))
-            if n >= 2:
-                break
-            else:
-                print("يجب أن يكون العدد 2 على الأقل.")
-        except ValueError:
-            print("الرجاء إدخال رقم صحيح.")
-    
-    # إدخال البيانات
-    concentrations = []
-    absorbances = []
-    
-    print("\nأدخل البيانات (التركيز أولاً ثم الامتصاصية):")
-    for i in range(n):
-        print(f"\nالنقطة {i+1}:")
-        while True:
-            try:
-                c = float(input("  التركيز (Concentration): "))
-                a = float(input("  الامتصاصية (Absorbance): "))
-                concentrations.append(c)
-                absorbances.append(a)
-                break
-            except ValueError:
-                print("الرجاء إدخال أرقام صحيحة.")
-    
-    # التأكد من ترتيب التركيزات تصاعدياً (إذا لم تكن مرتبة يمكن فرزها)
-    if not all(concentrations[i] <= concentrations[i+1] for i in range(n-1)):
-        print("\nتم فرز البيانات حسب التركيز.")
-        combined = sorted(zip(concentrations, absorbances))
-        concentrations, absorbances = zip(*combined)
-        concentrations = list(concentrations)
-        absorbances = list(absorbances)
-    
-    # حساب المعاملات
-    coeffs = natural_cubic_spline(concentrations, absorbances)
-    
-    # عرض النتائج
-    print("\n" + "="*60)
-    print("معاملات Spline لكل فترة:")
-    print("-"*60)
-    for i, (A, B, C, D) in enumerate(coeffs):
-        print(f"\nالفترة {i+1}: من x = {concentrations[i]:.4f} إلى x = {concentrations[i+1]:.4f}")
-        print(f"  Par A (a_i) = {A:.6f}")
-        print(f"  Par B (b_i) = {B:.6f}")
-        print(f"  Par C (c_i) = {C:.6f}")
-        print(f"  Par D (d_i) = {D:.6f}")
-        print(f"  المعادلة: S(x) = {A:.6f} + {B:.6f}*(x - {concentrations[i]:.4f}) + {C:.6f}*(x - {concentrations[i]:.4f})^2 + {D:.6f}*(x - {concentrations[i]:.4f})^3")
-    
-    # خيار إضافي: إدخال تركيز للتنبؤ بالامتصاصية
-    print("\n" + "="*60)
-    try:
-        x_pred = float(input("أدخل تركيزًا للتنبؤ بالامتصاصية (أو اضغط Enter لتخطي): ") or "skip")
-        if x_pred != "skip":
-            # تحديد الفترة المناسبة
-            if x_pred < concentrations[0] or x_pred > concentrations[-1]:
-                print("التركيز خارج النطاق المدخل. سيتم استخدام أقرب فترة.")
-                if x_pred < concentrations[0]:
-                    i = 0
-                else:
-                    i = len(coeffs)-1
-            else:
-                for i in range(len(coeffs)):
-                    if concentrations[i] <= x_pred <= concentrations[i+1]:
-                        break
-            A, B, C, D = coeffs[i]
-            dx = x_pred - concentrations[i]
-            y_pred = A + B*dx + C*dx**2 + D*dx**3
-            print(f"الامتصاصية المتوقعة عند التركيز {x_pred:.4f} هي {y_pred:.6f}")
-    except:
-        pass
+            cs = CubicSpline(x, y, bc_type='natural')
+        except Exception as e:
+            st.error(f"خطأ في الحساب: {e}")
+            st.stop()
 
-if __name__ == "__main__":
-    main()
+        # عرض المعاملات لكل فترة
+        st.subheader("📈 معاملات Spline لكل فترة")
+        intervals = []
+        for i in range(len(x)-1):
+            x_left = x[i]
+            x_right = x[i+1]
+            # نحصل على معاملات متعددة الحدود (تحتاج إلى استخراج المعاملات)
+            # CubicSpline يوفر معاملات متعددة الحدود المحلية
+            coeffs = cs.c[:, i]  # معاملات بالترتيب: c0, c1, c2, c3 (حسب الفترة)
+            # المعادلة: S(x) = a + b*(x - x_left) + c*(x - x_left)^2 + d*(x - x_left)^3
+            a = coeffs[0]
+            b = coeffs[1]
+            c = coeffs[2]
+            d = coeffs[3]
+            intervals.append({
+                "الفترة": f"{x_left:.4f} → {x_right:.4f}",
+                "Par A (a)": a,
+                "Par B (b)": b,
+                "Par C (c)": c,
+                "Par D (d)": d,
+            })
+            st.write(f"**الفترة {i+1}:** من {x_left:.4f} إلى {x_right:.4f}")
+            st.latex(f"S(x) = {a:.6f} + {b:.6f}(x-{x_left:.4f}) + {c:.6f}(x-{x_left:.4f})^2 + {d:.6f}(x-{x_left:.4f})^3")
+
+        # عرض جدول المعاملات
+        st.dataframe(pd.DataFrame(intervals), use_container_width=True)
+
+        # رسم المنحنى
+        st.subheader("📉 منحنى الانحدار (Spline)")
+        x_smooth = np.linspace(x.min(), x.max(), 200)
+        y_smooth = cs(x_smooth)
+
+        fig, ax = plt.subplots(figsize=(10, 6))
+        ax.plot(x_smooth, y_smooth, 'b-', label='Spline Interpolation', linewidth=2)
+        ax.scatter(x, y, color='red', s=100, zorder=5, label='Data Points')
+        ax.set_xlabel("Concentration", fontsize=12)
+        ax.set_ylabel("Absorbance", fontsize=12)
+        ax.set_title("Natural Cubic Spline", fontsize=14)
+        ax.legend()
+        ax.grid(True, linestyle='--', alpha=0.7)
+        st.pyplot(fig)
+
+        # خيار التنبؤ لتركيز جديد
+        st.subheader("🔮 توقع الامتصاصية لتركيز جديد")
+        new_x = st.number_input("أدخل تركيزًا:", value=float(x.mean()), format="%.4f")
+        if st.button("احسب الامتصاصية المتوقعة"):
+            if new_x < x.min() or new_x > x.max():
+                st.warning(f"التركيز خارج النطاق المدخل ({x.min():.4f} – {x.max():.4f}). سيتم استخدام أقرب فترة.")
+            y_pred = cs(new_x)
+            st.success(f"الامتصاصية المتوقعة عند التركيز **{new_x:.4f}** هي **{y_pred:.6f}**")
